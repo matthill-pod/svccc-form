@@ -14,6 +14,7 @@
     button { width: 100%; padding: 14px; background: #2563eb; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; margin-top: 25px; font-size: 16px; }
     button:disabled { background: #94a3b8; }
     .success { color: #16a34a; background: #dcfce7; padding: 12px; border-radius: 8px; text-align: center; font-weight: bold; margin-top: 20px; }
+    .hint { font-size: 11px; color: #6b7280; font-weight: normal; margin-top: 2px; display: block; }
   </style>
 </head>
 <body>
@@ -43,13 +44,26 @@
     </div>
 
     <div style="display:flex; gap:10px;">
-      <div style="flex:1"><label>Start Time</label><input type="time" name="startTime" required></div>
-      <div style="flex:1"><label>End Time</label><input type="time" name="endTime" required></div>
+      <div style="flex:1">
+        <label>Start Time</label>
+        <select name="startTime" id="startTimeSelect" required></select>
+      </div>
+      <div style="flex:1">
+        <label>End Time</label>
+        <select name="endTime" id="endTimeSelect" required></select>
+      </div>
     </div>
 
     <div style="display:flex; gap:10px;">
-      <div style="flex:1"><label>Start Miles</label><input type="number" step="0.1" name="startMileage" required></div>
-      <div style="flex:1"><label>End Miles</label><input type="number" step="0.1" name="endMileage" required></div>
+      <div style="flex:1">
+        <label>Start Miles</label>
+        <input type="number" step="0.1" name="startMileage" id="startMileageInput" required>
+        <span class="hint" id="mileageHint">Pulling latest...</span>
+      </div>
+      <div style="flex:1">
+        <label>End Miles</label>
+        <input type="number" step="0.1" name="endMileage" required>
+      </div>
     </div>
 
     <label>Petrol Cost (£)</label>
@@ -68,24 +82,88 @@
 
 <script>
   // PASTE YOUR NEW GOOGLE WEB APP URL HERE:
-  const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwLGlp_--KGzkJPudc5ZI2Uce2Xusl6sEZ228nPyKeLSLKRHjQgv4CL4h620DaOi2aZ/exec";
+  const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwQyeRq22wTRj46mpeyqBWjv5ted9m9dNA2ccmOPhJjs2EpIMTyMDfUwT3QIPkUZxQF/exec";
+  
+  let globalMileages = { "Kia": 0, "Peugeot": 0, "Dacia": 0 };
 
-  async function loadMembers() {
+  // 1. Generate clean 30-minute dropdown interval blocks
+  function populateTimeDropdowns() {
+    const startSelect = document.getElementById('startTimeSelect');
+    const endSelect = document.getElementById('endTimeSelect');
+    
+    let optionsHtml = '';
+    for (let h = 0; h < 24; h++) {
+      for (let m = 0; m < 60; m += 30) {
+        const hh = String(h).padStart(2, '0');
+        const mm = String(m).padStart(2, '0');
+        const timeStr = `${hh}:${mm}`;
+        optionsHtml += `<option value="${timeStr}">${timeStr}</option>`;
+      }
+    }
+    startSelect.innerHTML = optionsHtml;
+    endSelect.innerHTML = optionsHtml;
+
+    // Default End Time to the closest half-hour step matching right now
+    const now = new Date();
+    let currentMin = now.getMinutes();
+    let currentHour = now.getHours();
+    
+    if (currentMin >= 45) {
+      currentHour = (currentHour + 1) % 24;
+      currentMin = 0;
+    } else if (currentMin >= 15) {
+      currentMin = 30;
+    } else {
+      currentMin = 0;
+    }
+    
+    const targetTimeStr = `${String(currentHour).padStart(2, '0')}:${String(currentMin).padStart(2, '0')}`;
+    endSelect.value = targetTimeStr;
+    
+    // Default Start Time to 1 hour prior to keep spacing sensible
+    let startHour = (currentHour - 1 + 24) % 24;
+    startSelect.value = `${String(startHour).padStart(2, '0')}:${String(currentMin).padStart(2, '0')}`;
+  }
+
+  // 2. Adjust input value based on currently selected vehicle key
+  function updateStartMileage() {
+    const selectedCar = document.getElementById('carSelect').value;
+    const lastKnown = globalMileages[selectedCar] || 0;
+    document.getElementById('startMileageInput').value = lastKnown;
+    document.getElementById('mileageHint').innerText = `Sheet value: ${lastKnown} mi`;
+  }
+
+  // 3. Connect to the spreadsheet API backend data assets
+  async function loadInitialData() {
     try {
       const response = await fetch(WEB_APP_URL);
-      const members = await response.json();
+      const data = await response.json();
+      
+      // Map members dropdown
       const select = document.getElementById('memberSelect');
       select.innerHTML = '<option value="">-- Choose Member --</option>';
-      members.forEach(m => {
+      data.members.forEach(m => {
         const opt = document.createElement('option');
         opt.value = opt.text = m;
         select.add(opt);
       });
+
+      // Stash odometer data and match visual field
+      if (data.mileages) {
+        globalMileages = data.mileages;
+        updateStartMileage();
+      }
     } catch (e) {
-      document.getElementById('memberSelect').innerHTML = '<option value="">Error loading members</option>';
+      document.getElementById('memberSelect').innerHTML = '<option value="">Error loading list</option>';
+      document.getElementById('mileageHint').innerText = "Failed to sync";
     }
   }
 
+  // Bind car selection field changes to the odometer lookup script engine
+  document.getElementById('carSelect').addEventListener('change', updateStartMileage);
+
+  // Initialization scripts
+  populateTimeDropdowns();
   const params = new URLSearchParams(window.location.search);
   const carParam = params.get('car');
   if(carParam) {
@@ -98,9 +176,8 @@
     }
   }
   document.getElementById('dateInput').value = new Date().toISOString().split('T')[0];
-  loadMembers();
+  loadInitialData();
 
-  // Helper function to turn the image file into a text string
   const toBase64 = file => new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
@@ -108,25 +185,22 @@
     reader.onerror = error => reject(error);
   });
 
+  // Submission script loop handler pipeline 
   document.getElementById('tripForm').onsubmit = async (e) => {
     e.preventDefault();
     const btn = document.getElementById('btn');
     const status = document.getElementById('status');
     btn.disabled = true;
-    btn.innerText = "Processing Image & Saving...";
+    btn.innerText = "Saving data records...";
 
     const formData = new FormData(e.target);
     const data = Object.fromEntries(formData);
     
-    // Process image file if uploaded
     const fileInput = document.getElementById('receiptInput');
     if (fileInput.files.length > 0) {
       const file = fileInput.files[0];
       const base64Str = await toBase64(file);
-      data.receiptFile = {
-        base64: base64Str,
-        type: file.type
-      };
+      data.receiptFile = { base64: base64Str, type: file.type };
     }
 
     try {
@@ -135,9 +209,11 @@
         mode: 'no-cors', 
         body: JSON.stringify(data)
       });
-      status.innerHTML = "<div class='success'>✅ Trip & Receipt Logged!</div>";
+      status.innerHTML = "<div class='success'>✅ Logged! Spreadsheet and mileage updated.</div>";
       e.target.reset();
       document.getElementById('dateInput').value = new Date().toISOString().split('T')[0];
+      populateTimeDropdowns();
+      loadInitialData(); 
     } catch (err) {
       status.innerHTML = "<p style='color:red; text-align:center;'>Error: " + err.message + "</p>";
     } finally {
